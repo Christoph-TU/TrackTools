@@ -118,7 +118,7 @@
 
 <header>
     <h1>Track Tools</h1>
-    <label>Mode 
+    <label>Mode
         <select id="modeSelect">
             <option value="view">Visualize Files</option>
             <option value="draw">Draw Track</option>
@@ -587,12 +587,19 @@
         document.getElementById('tripNextBtn').addEventListener('click', nextTrip);
 
         window.addEventListener('keydown', e => {
-            if (e.key === 'ArrowLeft') {
-                prevTrack();
-                prevTrip();
-            } else if (e.key === 'ArrowRight') {
-                nextTrack();
-                nextTrip();
+            switch (e.key) {
+                case 'a':
+                    prevTrack();
+                    break;
+                case 'd':
+                    nextTrack();
+                    break;
+                case 's':
+                    prevTrip();
+                    break;
+                case 'w':
+                    nextTrip();
+                    break;
             }
         });
 
