@@ -664,7 +664,7 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
                     swatch.className = 'legend-color';
                     swatch.style.background = colour;
                     const lbl = document.createElement('span');
-                    lbl.textContent = t.name + " 🏁 " + t.trip.length;
+                    lbl.textContent = t.name + " 🏁 " + (t.trip.length-1);
                     item.appendChild(swatch);
                     item.appendChild(lbl);
                     legendDiv.appendChild(item);
