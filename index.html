@@ -1,8 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8"/>
-    <title>Track Editor & Visualizer</title>
+    <title>Track Editor & Visualizer (multi-solution)</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -69,7 +70,8 @@
             max-width: 100%;
         }
 
-        .controls, .viewer-controls {
+        .controls,
+        .viewer-controls {
             display: flex;
             gap: 1rem;
             flex-wrap: wrap;
@@ -96,6 +98,16 @@
             border: red 1px solid;
         }
 
+        #multiToggleBtn {
+            border: 1px solid #aaa;
+            width: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            cursor: pointer;
+        }
+
         #log {
             white-space: pre-wrap;
             background: #f5f5f5;
@@ -104,7 +116,11 @@
             margin-top: 1rem;
         }
 
-        button, input[type="file"], input[type="number"], input[type="text"], select {
+        button,
+        input[type="file"],
+        input[type="number"],
+        input[type="text"],
+        select {
             height: 30px;
             line-height: 30px;
             padding: 0 .5rem;
@@ -112,8 +128,31 @@
             border-radius: 5px;
         }
 
+        /* ─────────────────────── Legend ─────────────────────── */
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: .75rem 1.5rem;
+            align-items: center;
+            margin-top: .5rem;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: .4rem;
+            font-size: .9rem;
+        }
+
+        .legend-color {
+            width: 14px;
+            height: 14px;
+            border: 1px solid #000;
+            border-radius: 3px;
+        }
     </style>
 </head>
+
 <body>
 
 <header>
@@ -161,9 +200,17 @@
         <button id="tripPrevBtn">◀ Solution</button>
         <span id="tripLabel">-</span>
         <button id="tripNextBtn">Solution ▶</button>
+        <button id="multiToggleBtn" title="Lock solutions to their tracks.
+They solution need to match the track name e.g.:
+For Track file: track_01.t
+Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
+            🔓
+        </button>
     </div>
 
+    <div id="legend" class="legend" aria-label="Solution legend" style="visibility: hidden;"></div>
     <canvas id="canvas" width="800" height="800" aria-label="Track visualization"></canvas>
+
 
     <pre id="log"></pre>
 </fieldset>
@@ -197,6 +244,15 @@
         ...Object.fromEntries(Object.entries(tileTypes).map(([k, v]) => [k, v.color])),
         default: tileTypes.O.color
     };
+
+    /* colours for multiple solution paths */
+    const PATH_COLORS = [
+        "#000000",
+        "#fb5a00",
+        "#0042ff",
+        "#b113e3",
+        "#ff0101",
+    ];
 
     /*******************************  Draw module  *******************************/
     (() => {
@@ -332,6 +388,8 @@
             r.readAsText(file);
         });
 
+        const baseName = name => name.replace(/\.[^/.]+$/, '').replace(/_sol.*$/, '');
+
         /* ===== Geometry ===== */
         function intersectLines(ax, ay, bx, by, cx, cy, dx, dy) {
             const d1 = (ax - bx) * (cy - dy);
@@ -413,11 +471,11 @@
             }
         }
 
-        function drawTrip(ctx, trip, rows) {
+        function drawTrip(ctx, trip, rows, colour = "#000") {
             if (!trip.length) return;
 
             ctx.lineWidth = 3;
-            ctx.strokeStyle = "#000";
+            ctx.strokeStyle = colour;
             ctx.beginPath();
             trip.forEach(([x, y], i) => {
                 const [px, py] = coordToPixel(x, y, rows);
@@ -426,11 +484,11 @@
             ctx.stroke();
 
             ctx.font = "12px sans-serif";
-            ctx.fillStyle = "#000";
+            ctx.fillStyle = colour;
             trip.forEach(([x, y], i) => {
                 const [px, py] = coordToPixel(x, y, rows);
                 ctx.save();
-                ctx.strokeStyle = "#000";
+                ctx.strokeStyle = colour;
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.moveTo(px - CROSS_HALF, py - CROSS_HALF);
@@ -518,9 +576,18 @@
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         let tracks = [], trips = [], currentTrack = 0, currentTrip = 0;
+        let multiMode = false;
         const trackLabel = document.getElementById('trackLabel');
         const tripLabel = document.getElementById('tripLabel');
         const logEl = document.getElementById('log');
+        const legendDiv = document.getElementById('legend');
+        const multiToggleBtn = document.getElementById('multiToggleBtn');
+
+        multiToggleBtn.addEventListener('click', () => {
+            multiMode = !multiMode;
+            multiToggleBtn.textContent = multiMode ? '🔒' : '🔓';
+            drawCurrent();
+        });
 
         document.getElementById('processBtn').addEventListener('click', async () => {
             const trackFiles = Array.from(document.getElementById('trackFiles').files);
@@ -545,15 +612,56 @@
         function drawCurrent() {
             if (!tracks.length || !trips.length) return;
             const track = tracks[currentTrack];
-            const trip = trips[currentTrip];
             drawBoard(ctx, track.grid);
-            drawTrip(ctx, trip.trip, track.rows);
-            const {wrong, finished} = validateTrip(track, trip.trip);
-            drawErrors(ctx, wrong, track.rows);
-            logEl.textContent = `Track: ${track.name}\nSolution: ${trip.name}\nWrong points: ${JSON.stringify(wrong)}\nFinish reached: ${finished}`;
+
+            const relevantTrips = multiMode
+                ? trips.filter(t => baseName(t.name) === baseName(track.name))
+                : [trips[currentTrip]];
+
+            legendDiv.innerHTML = '';
+            legendDiv.style.visibility = multiMode ? 'visible' : 'hidden';
+
+            const multiLog = [];
+
+            relevantTrips.forEach((t, idx) => {
+                const colour = PATH_COLORS[idx % PATH_COLORS.length];
+                drawTrip(ctx, t.trip, track.rows, colour);
+
+                // Validate and draw errors for each trip
+                const {wrong, finished} = validateTrip(track, t.trip);
+                drawErrors(ctx, wrong, track.rows);
+
+                if (multiMode) {
+                    // Build legend item
+                    const item = document.createElement('div');
+                    item.className = 'legend-item';
+                    const swatch = document.createElement('span');
+                    swatch.className = 'legend-color';
+                    swatch.style.background = colour;
+                    const lbl = document.createElement('span');
+                    lbl.textContent = t.name + " 🏁 " + t.trip.length;
+                    item.appendChild(swatch);
+                    item.appendChild(lbl);
+                    legendDiv.appendChild(item);
+
+                    // Add to log
+                    multiLog.push(`${t.name}: ${wrong.length > 0 ? `❌ ${wrong.length} wrong point(s)` : '✔️ no errors'}`);
+                } else {
+                    logEl.textContent = `Track: ${track.name}\nSolution: ${t.name}\n❌ Wrong points: ${JSON.stringify(wrong)}\nFinish reached: ${finished}`;
+                }
+            });
+
+            if (multiMode) {
+                logEl.textContent = `Track: ${track.name}\nMulti-solution view: ${relevantTrips.length} solution(s) shown.\n` +
+                    multiLog.join('\n');
+            }
+
             trackLabel.textContent = `${currentTrack + 1}/${tracks.length}: ${track.name}`;
-            tripLabel.textContent = `${currentTrip + 1}/${trips.length}: ${trip.name}`;
+            tripLabel.textContent = multiMode
+                ? `–`
+                : `${currentTrip + 1}/${trips.length}: ${relevantTrips[0].name}`;
         }
+
 
         const resetZoomBtn = document.getElementById('resetZoomBtn');
 
@@ -571,12 +679,12 @@
             drawCurrent();
         };
         const prevTrip = () => {
-            if (!trips.length) return;
+            if (!trips.length || multiMode) return;
             currentTrip = (currentTrip - 1 + trips.length) % trips.length;
             drawCurrent();
         };
         const nextTrip = () => {
-            if (!trips.length) return;
+            if (!trips.length || multiMode) return;
             currentTrip = (currentTrip + 1) % trips.length;
             drawCurrent();
         };
@@ -651,4 +759,5 @@
     })();
 </script>
 </body>
+
 </html>
