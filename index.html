@@ -96,6 +96,7 @@
         #resetZoomBtn {
             margin-left: auto;
             border: red 1px solid;
+            z-index: 1000;
         }
 
         #multiToggleBtn {
@@ -126,6 +127,19 @@
             padding: 0 .5rem;
             box-sizing: border-box;
             border-radius: 5px;
+        }
+
+        #viztips {
+            font-size: 0.9rem;
+            color: #444;
+            background-color: #f0f4f8;
+            padding: 0.3rem 1rem;
+            border-left: 4px solid #007acc;
+            border-radius: 4px;
+        }
+
+        #viztips strong {
+            color: #005a9e;
         }
 
         /* ─────────────────────── Legend ─────────────────────── */
@@ -163,6 +177,10 @@
             <option value="draw">Draw Track</option>
         </select>
     </label>
+    <p id="viztips">
+        <strong>Tips:</strong> Shift + Wheel to zoom, Mouse to drag, Change Track: W,D, Change Solution: W,S, Hover 🔓
+        Button for more info.
+    </p>
 </header>
 
 <!-- ╔══════════════════════════════ Draw mode ══════════════════════════════╗ -->
@@ -222,10 +240,12 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
         const modeSel = document.getElementById('modeSelect');
         const drawFS = document.getElementById('drawMode');
         const viewFS = document.getElementById('viewMode');
+        const vizTips = document.getElementById('viztips')
 
         function switchMode(val) {
             drawFS.style.display = val === 'draw' ? '' : 'none';
             viewFS.style.display = val === 'view' ? '' : 'none';
+            vizTips.style.display = val === 'view' ? '' : 'none';
         }
 
         modeSel.addEventListener('change', e => switchMode(e.target.value));
@@ -724,7 +744,7 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
         }
 
         canvas.addEventListener('wheel', e => {
-            if (e.ctrlKey) return;
+            if (!e.shiftKey) return;
             e.preventDefault();
             zoomCss *= e.deltaY < 0 ? 1.15 : 0.87;
             zoomCss = Math.min(Math.max(zoomCss, 0.25), 4);
