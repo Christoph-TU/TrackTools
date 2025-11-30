@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8"/>
-    <title>Track Editor & Visualizer (multi-solution)</title>
+    <title>Track Editor & Visualizer (Canvas Update)</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -36,19 +36,11 @@
         }
 
         /* ───────────────────────── Draw mode ───────────────────────── */
-        #grid {
-            display: inline-block;
-        }
-
-        .row {
-            display: flex;
-        }
-
-        .cell {
-            width: 24px;
-            height: 24px;
+        #drawCanvas {
             border: 1px solid #aaa;
-            box-sizing: border-box;
+            cursor: crosshair;
+            display: block;
+            margin-top: 10px;
         }
 
         .palette button {
@@ -61,10 +53,12 @@
 
         .palette button.selected {
             border-color: #000;
+            font-weight: bold;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
         }
 
         /* ──────────────────────── View mode (canvas) ─────────────────────── */
-        canvas {
+        #canvas {
             border: 1px solid #aaa;
             margin-top: 1rem;
             max-width: 100%;
@@ -178,28 +172,27 @@
         </select>
     </label>
     <p id="viztips">
-        <strong>Tips:</strong> Shift + Wheel to zoom, Mouse to drag, Change Track: W,D, Change Solution: W,S, Hover 🔓
+        <strong>Tips:</strong> Shift + Wheel to zoom, Mouse to drag, Change Track: W,D, Change Solution: W,S, Hover
+        🔓
         Button for more info.
     </p>
 </header>
 
-<!-- ╔══════════════════════════════ Draw mode ══════════════════════════════╗ -->
 <fieldset id="drawMode">
     <legend>Draw New Track</legend>
     <div class="controls">
-        <label>Width <input type="number" id="width" min="3" value="20"/></label>
-        <label>Height <input type="number" id="height" min="3" value="20"/></label>
+        <label>Width <input type="number" id="width" min="3" value="30"/></label>
+        <label>Height <input type="number" id="height" min="3" value="30"/></label>
+        <label hidden>Pixel Scale <input type="number" id="scale" min="5" value="20"
+                                         title="Size of grid cells in px"/></label>
         <label>File name <input type="text" id="filename" value="track" placeholder="track"/></label>
-        <button id="createBtn">Create Grid</button>
-        <button id="saveBtn" disabled>Save .t</button>
+        <button id="createBtn">Reset/Create Grid</button>
+        <button id="saveBtn">Save .t</button>
         <label>Load track <input type="file" id="loadTrackFile" accept=".t"/></label>
     </div>
-    <div class="palette" id="palette"></div>
-    <div id="grid"></div>
+    <div class="palette" id="palette" style="margin-top: 10px;"></div>
+    <canvas id="drawCanvas"></canvas>
 </fieldset>
-<!-- ╚═══════════════════════════════════════════════════════════════════════╝ -->
-
-<!-- ╔═════════════════════════════ View mode ═══════════════════════════════╗ -->
 <fieldset id="viewMode">
     <legend>Load & Visualize</legend>
 
@@ -232,10 +225,8 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
 
     <pre id="log"></pre>
 </fieldset>
-<!-- ╚═══════════════════════════════════════════════════════════════════════╝ -->
-
 <script>
-    /*****************  Mode switch - show one fieldset at a time  **************/
+    /***************** Mode switch - show one fieldset at a time  **************/
     (function () {
         const modeSel = document.getElementById('modeSelect');
         const drawFS = document.getElementById('drawMode');
@@ -252,7 +243,7 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
         switchMode(modeSel.value); // initial state
     })();
 
-    /*********************  Shared tile definitions & colours  *******************/
+    /********************* Shared tile definitions & colours  *******************/
     const tileTypes = {
         T: {name: "Track", color: "#dcdcdc"},
         S: {name: "Start", color: "#b6b6b6"},
@@ -265,24 +256,24 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
         default: tileTypes.O.color
     };
 
-    /* colours for multiple solution paths */
     const PATH_COLORS = [
-        "#000000", // Black
-        "#fb5a00", // Orange
-        "#0042ff", // Blue
-        "#7a02a4", // Purple
-        "#ff0101", // Red
-        "#e91e63", // Pink
-        "#572d08", // Brown
-        "#a726bd", // Deep Purple
-        "#ffc107", // Amber
-        "#607d8b", // Blue Grey
+        "#000000", "#fb5a00", "#0042ff", "#7a02a4", "#ff0101",
+        "#e91e63", "#572d08", "#a726bd", "#ffc107", "#607d8b",
     ];
 
-    /*******************************  Draw module  *******************************/
+    /******************************* Draw module (Updated to Canvas) *******************************/
     (() => {
+        const canvas = document.getElementById("drawCanvas");
+        const ctx = canvas.getContext("2d", {alpha: false}); // Optimize for speed
+        let gridData = []; // 2D array: gridData[y][x]
+        let width = 30;
+        let height = 30;
+        let cellSize = 20;
+
         let selectedChar = "T";
-        let isMouseDown = false;
+        let isDrawing = false;
+        let lastGridX = -1;
+        let lastGridY = -1;
 
         // Build palette
         const paletteDiv = document.getElementById("palette");
@@ -299,97 +290,154 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
             paletteDiv.appendChild(btn);
         }
 
-        document.addEventListener("mousedown", () => {
-            isMouseDown = true;
-        });
-        document.addEventListener("mouseup", () => {
-            isMouseDown = false;
-        });
-
-        function applyChar(cell, char) {
-            cell.style.background = tileTypes[char]?.color || tileTypes.T.color;
-            cell.dataset.char = char;
-        }
-
-        function paint(cell) {
-            if (cell.dataset.locked === "true") return; // immutable border
-            applyChar(cell, selectedChar);
-        }
-
-        function createGrid(w, h) {
-            const grid = document.getElementById("grid");
-            grid.innerHTML = "";
+        function initGrid(w, h, fill = "T") {
+            width = w;
+            height = h;
+            gridData = [];
             for (let y = 0; y < h; y++) {
-                const rowDiv = document.createElement("div");
-                rowDiv.className = "row";
+                const row = [];
                 for (let x = 0; x < w; x++) {
-                    const cell = document.createElement("div");
-                    cell.className = "cell";
-
                     const isBorder = x === 0 || y === 0 || x === w - 1 || y === h - 1;
-                    if (isBorder) {
-                        applyChar(cell, "O");
-                        cell.dataset.locked = "true";
-                    } else {
-                        applyChar(cell, "T");
-                    }
-
-                    cell.onmousedown = e => {
-                        e.preventDefault();
-                        paint(cell);
-                    };
-                    cell.onmouseenter = () => {
-                        if (isMouseDown) paint(cell);
-                    };
-                    rowDiv.appendChild(cell);
+                    row.push(isBorder ? "O" : fill);
                 }
-                grid.appendChild(rowDiv);
+                gridData.push(row);
             }
-            document.getElementById("saveBtn").disabled = false;
+            resizeCanvas();
+            render();
         }
 
-        // Load .t file into editor
-        document.getElementById('loadTrackFile').addEventListener('change', async e => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const text = await file.text();
-            loadTrackToEditor(text);
-            // reset input so selecting same file again triggers change
-            e.target.value = '';
+        function resizeCanvas() {
+            canvas.width = width * cellSize;
+            canvas.height = height * cellSize;
+        }
+
+        function render() {
+            // Fill background
+            ctx.fillStyle = "#fff";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw cells
+            for (let y = 0; y < height; y++) {
+                for (let x = 0; x < width; x++) {
+                    const char = gridData[y][x];
+                    ctx.fillStyle = tileTypes[char]?.color || "#000";
+                    ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+                }
+            }
+
+            // Draw Grid Lines (light overlay)
+            ctx.beginPath();
+            ctx.strokeStyle = "rgba(0,0,0,0.1)";
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= width; i++) {
+                ctx.moveTo(i * cellSize, 0);
+                ctx.lineTo(i * cellSize, height * cellSize);
+            }
+            for (let i = 0; i <= height; i++) {
+                ctx.moveTo(0, i * cellSize);
+                ctx.lineTo(width * cellSize, i * cellSize);
+            }
+            ctx.stroke();
+        }
+
+        // Set cell data safely (respecting borders)
+        function setCell(x, y, char) {
+            if (x <= 0 || y <= 0 || x >= width - 1 || y >= height - 1) return; // Locked border
+            gridData[y][x] = char;
+        }
+
+        // Bresenham's Line Algorithm to prevent skipping when drawing fast
+        function plotLine(x0, y0, x1, y1) {
+            const dx = Math.abs(x1 - x0);
+            const dy = -Math.abs(y1 - y0);
+            const sx = x0 < x1 ? 1 : -1;
+            const sy = y0 < y1 ? 1 : -1;
+            let err = dx + dy;
+
+            while (true) {
+                setCell(x0, y0, selectedChar);
+                if (x0 === x1 && y0 === y1) break;
+                const e2 = 2 * err;
+                if (e2 >= dy) {
+                    err += dy;
+                    x0 += sx;
+                }
+                if (e2 <= dx) {
+                    err += dx;
+                    y0 += sy;
+                }
+            }
+        }
+
+        // --- Interaction Handlers ---
+
+        function getCoords(e) {
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.floor((e.clientX - rect.left) / cellSize);
+            const y = Math.floor((e.clientY - rect.top) / cellSize);
+            return {x, y};
+        }
+
+        canvas.addEventListener("mousedown", e => {
+            isDrawing = true;
+            const {x, y} = getCoords(e);
+            if (x >= 0 && x < width && y >= 0 && y < height) {
+                setCell(x, y, selectedChar);
+                lastGridX = x;
+                lastGridY = y;
+                render();
+            }
         });
 
-        function loadTrackToEditor(text) {
-            const lines = text.replace(/\r\n/g, "\n").split("\n").filter(Boolean);
-            if (!lines.length) {
-                alert('File is empty');
-                return;
+        window.addEventListener("mouseup", () => {
+            isDrawing = false;
+            lastGridX = -1;
+            lastGridY = -1;
+        });
+
+        canvas.addEventListener("mousemove", e => {
+            if (!isDrawing) return;
+            const {x, y} = getCoords(e);
+
+            // Out of bounds check
+            if (x < 0 || x >= width || y < 0 || y >= height) return;
+
+            // Interpolate line from last position to current to fill gaps
+            if (lastGridX !== -1 && lastGridY !== -1) {
+                plotLine(lastGridX, lastGridY, x, y);
+            } else {
+                setCell(x, y, selectedChar);
             }
-            const h = lines.length;
-            const w = Math.max(...lines.map(l => l.length));
-            document.getElementById('width').value = w;
-            document.getElementById('height').value = h;
-            createGrid(w, h);
-            const rows = [...document.querySelectorAll('#grid .row')];
-            lines.forEach((ln, y) => {
-                [...ln].forEach((ch, x) => {
-                    if (x < w && y < h) {
-                        const cell = rows[y].children[x];
-                        applyChar(cell, ch);
-                        if (x === 0 || y === 0 || x === w - 1 || y === h - 1) cell.dataset.locked = 'true';
-                    }
-                });
-            });
-        }
+
+            lastGridX = x;
+            lastGridY = y;
+
+            // Use requestAnimationFrame for smoother rendering on large grids?
+            // For pixel art grids, direct render is usually fine, but let's keep it simple.
+            render();
+        });
+
+        // --- Buttons ---
 
         document.getElementById("createBtn").onclick = () => {
             const w = +document.getElementById("width").value;
             const h = +document.getElementById("height").value;
-            if (w >= 3 && h >= 3) createGrid(w, h);
+            const s = +document.getElementById("scale").value;
+            if (w >= 3 && h >= 3) {
+                cellSize = s || 20;
+                initGrid(w, h);
+            }
         };
 
         document.getElementById("saveBtn").onclick = () => {
-            const rows = [...document.querySelectorAll("#grid .row")];
-            const lines = rows.map(r => [...r.children].map(c => c.dataset.char || "T").join(""));
+            // Note: Coordinate system in file is typically bottom-left (0,0) based on visualization logic?
+            // The visualization module flips Y.
+            // Standard expectation: Line 0 in file is Top of the grid or Bottom?
+            // Existing View Code: "lines.forEach((ln, i) => { const y = rows - 1 - i; ..."
+            // This implies the File's 1st line is the TOP of the visual grid (Y=Max).
+            // So we can just join gridData strings naturally.
+
+            const lines = gridData.map(row => row.join(""));
             const content = lines.join("\n");
 
             let fname = document.getElementById("filename").value.trim() || "track";
@@ -402,8 +450,50 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
             a.click();
             URL.revokeObjectURL(url);
         };
+
+        document.getElementById('loadTrackFile').addEventListener('change', async e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const text = await file.text();
+
+            const lines = text.replace(/\r\n/g, "\n").split("\n").filter(Boolean);
+            if (!lines.length) return alert('File is empty');
+
+            const h = lines.length;
+            const w = Math.max(...lines.map(l => l.length));
+
+            document.getElementById('width').value = w;
+            document.getElementById('height').value = h;
+
+            // Re-init grid
+            gridData = [];
+            width = w;
+            height = h;
+
+            lines.forEach((ln, y) => {
+                const row = [];
+                for (let x = 0; x < w; x++) {
+                    const ch = ln[x] || "T";
+                    row.push(ch);
+                }
+                gridData.push(row);
+            });
+
+            // Ensure borders are locked visually (optional, but good for consistency)
+            // The existing tool forced borders to 'O' on create, but load might imply custom borders.
+            // We will trust the file loaded.
+
+            resizeCanvas();
+            render();
+
+            e.target.value = '';
+        });
+
+        // Initialize on load
+        initGrid(30, 30);
     })();
-    /****************************  Visualizer module  ***************************/
+
+    /**************************** Visualizer module  ***************************/
     (() => {
         /* ===== Utility ===== */
         const readFileAsText = file => new Promise((res, rej) => {
@@ -664,7 +754,7 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
                     swatch.className = 'legend-color';
                     swatch.style.background = colour;
                     const lbl = document.createElement('span');
-                    lbl.textContent = t.name + " 🏁 " + (t.trip.length-1);
+                    lbl.textContent = t.name + " 🏁 " + (t.trip.length - 1);
                     item.appendChild(swatch);
                     item.appendChild(lbl);
                     legendDiv.appendChild(item);
