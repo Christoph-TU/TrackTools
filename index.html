@@ -57,6 +57,13 @@
             box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
         }
 
+        /* New styles for tools */
+        .active-tool {
+            background-color: #ccc;
+            border: 2px solid #333;
+            font-weight: bold;
+        }
+
         /* ──────────────────────── View mode (canvas) ─────────────────────── */
         #canvas {
             border: 1px solid #aaa;
@@ -183,12 +190,19 @@
     <div class="controls">
         <label>Width <input type="number" id="width" min="3" value="30"/></label>
         <label>Height <input type="number" id="height" min="3" value="30"/></label>
-        <label hidden>Pixel Scale <input type="number" id="scale" min="5" value="20"
-                                         title="Size of grid cells in px"/></label>
-        <label>File name <input type="text" id="filename" value="track" placeholder="track"/></label>
-        <button id="createBtn">Reset/Create Grid</button>
-        <button id="saveBtn">Save .t</button>
-        <label>Load track <input type="file" id="loadTrackFile" accept=".t"/></label>
+        <button id="createBtn">New Grid</button>
+
+        <div style="border-left: 1px solid #ccc; padding-left: 1rem; display:flex; gap: 0.5rem;">
+            <button id="undoBtn" title="Ctrl+Z">↶ Undo</button>
+            <button id="redoBtn" title="Ctrl+Y">↷ Redo</button>
+            <button id="fillBtn" title="Flood Fill Tool">🪣 Fill</button>
+        </div>
+
+        <div style="border-left: 1px solid #ccc; padding-left: 1rem; display:flex; gap: 0.5rem;">
+            <label>File name <input type="text" id="filename" value="track" placeholder="track"/></label>
+            <button id="saveBtn">Save .t</button>
+            <label>Load track <input type="file" id="loadTrackFile" accept=".t"/></label>
+        </div>
     </div>
     <div class="palette" id="palette" style="margin-top: 10px;"></div>
     <canvas id="drawCanvas"></canvas>
@@ -261,11 +275,11 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
         "#e91e63", "#572d08", "#a726bd", "#ffc107", "#607d8b",
     ];
 
-    /******************************* Draw module (Updated to Canvas) *******************************/
+    /******************************* Draw module (Updated with Undo/Fill) *******************************/
     (() => {
         const canvas = document.getElementById("drawCanvas");
-        const ctx = canvas.getContext("2d", {alpha: false}); // Optimize for speed
-        let gridData = []; // 2D array: gridData[y][x]
+        const ctx = canvas.getContext("2d", {alpha: false});
+        let gridData = [];
         let width = 30;
         let height = 30;
         let cellSize = 20;
@@ -274,6 +288,11 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
         let isDrawing = false;
         let lastGridX = -1;
         let lastGridY = -1;
+
+        // Undo/Redo/Fill State
+        let history = [];
+        let historyIndex = -1;
+        let isFillMode = false;
 
         // Build palette
         const paletteDiv = document.getElementById("palette");
@@ -286,6 +305,8 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
             btn.onclick = () => {
                 selectedChar = char;
                 [...paletteDiv.children].forEach(b => b.classList.toggle("selected", b === btn));
+                // If picking a color, likely want to turn off fill mode, or keep it?
+                // Let's keep fill mode on if it was on, allows switching colors easily while filling.
             };
             paletteDiv.appendChild(btn);
         }
@@ -304,6 +325,49 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
             }
             resizeCanvas();
             render();
+            // Reset history
+            history = [];
+            historyIndex = -1;
+            saveState();
+        }
+
+        // --- History Management ---
+        function saveState() {
+            // Remove any redo states
+            if (historyIndex < history.length - 1) {
+                history = history.slice(0, historyIndex + 1);
+            }
+            // Deep copy
+            const snapshot = gridData.map(row => [...row]);
+            history.push(snapshot);
+            historyIndex++;
+            updateUI();
+        }
+
+        function undo() {
+            if (historyIndex > 0) {
+                historyIndex--;
+                gridData = history[historyIndex].map(row => [...row]);
+                render();
+                updateUI();
+            }
+        }
+
+        function redo() {
+            if (historyIndex < history.length - 1) {
+                historyIndex++;
+                gridData = history[historyIndex].map(row => [...row]);
+                render();
+                updateUI();
+            }
+        }
+
+        function updateUI() {
+            document.getElementById("undoBtn").disabled = historyIndex <= 0;
+            document.getElementById("redoBtn").disabled = historyIndex >= history.length - 1;
+            const fillBtn = document.getElementById("fillBtn");
+            if (isFillMode) fillBtn.classList.add('active-tool');
+            else fillBtn.classList.remove('active-tool');
         }
 
         function resizeCanvas() {
@@ -312,11 +376,8 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
         }
 
         function render() {
-            // Fill background
             ctx.fillStyle = "#fff";
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-            // Draw cells
             for (let y = 0; y < height; y++) {
                 for (let x = 0; x < width; x++) {
                     const char = gridData[y][x];
@@ -324,8 +385,6 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
                     ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
                 }
             }
-
-            // Draw Grid Lines (light overlay)
             ctx.beginPath();
             ctx.strokeStyle = "rgba(0,0,0,0.1)";
             ctx.lineWidth = 1;
@@ -338,22 +397,22 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
                 ctx.lineTo(width * cellSize, i * cellSize);
             }
             ctx.stroke();
+
+            // Cursor hint
+            canvas.style.cursor = isFillMode ? "alias" : "crosshair";
         }
 
-        // Set cell data safely (respecting borders)
         function setCell(x, y, char) {
-            if (x <= 0 || y <= 0 || x >= width - 1 || y >= height - 1) return; // Locked border
+            if (x <= 0 || y <= 0 || x >= width - 1 || y >= height - 1) return;
             gridData[y][x] = char;
         }
 
-        // Bresenham's Line Algorithm to prevent skipping when drawing fast
         function plotLine(x0, y0, x1, y1) {
             const dx = Math.abs(x1 - x0);
             const dy = -Math.abs(y1 - y0);
             const sx = x0 < x1 ? 1 : -1;
             const sy = y0 < y1 ? 1 : -1;
             let err = dx + dy;
-
             while (true) {
                 setCell(x0, y0, selectedChar);
                 if (x0 === x1 && y0 === y1) break;
@@ -369,6 +428,34 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
             }
         }
 
+        // --- Flood Fill Algorithm ---
+        function floodFill(sx, sy, newChar) {
+            // Safety checks: within editable bounds
+            if (sx <= 0 || sy <= 0 || sx >= width - 1 || sy >= height - 1) return;
+
+            const targetChar = gridData[sy][sx];
+            if (targetChar === newChar) return;
+
+            const queue = [[sx, sy]];
+
+            while (queue.length) {
+                const [x, y] = queue.pop();
+
+                // Check Bounds
+                if (x <= 0 || y <= 0 || x >= width - 1 || y >= height - 1) continue;
+
+                if (gridData[y][x] === targetChar) {
+                    gridData[y][x] = newChar;
+                    queue.push([x + 1, y]);
+                    queue.push([x - 1, y]);
+                    queue.push([x, y + 1]);
+                    queue.push([x, y - 1]);
+                }
+            }
+            render();
+            saveState(); // Save state after fill
+        }
+
         // --- Interaction Handlers ---
 
         function getCoords(e) {
@@ -379,9 +466,13 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
         }
 
         canvas.addEventListener("mousedown", e => {
-            isDrawing = true;
             const {x, y} = getCoords(e);
-            if (x >= 0 && x < width && y >= 0 && y < height) {
+            if (x < 0 || x >= width || y < 0 || y >= height) return;
+
+            if (isFillMode) {
+                floodFill(x, y, selectedChar);
+            } else {
+                isDrawing = true;
                 setCell(x, y, selectedChar);
                 lastGridX = x;
                 lastGridY = y;
@@ -390,30 +481,26 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
         });
 
         window.addEventListener("mouseup", () => {
-            isDrawing = false;
-            lastGridX = -1;
-            lastGridY = -1;
+            if (isDrawing) {
+                isDrawing = false;
+                lastGridX = -1;
+                lastGridY = -1;
+                saveState(); // Save state after stroke finishes
+            }
         });
 
         canvas.addEventListener("mousemove", e => {
             if (!isDrawing) return;
             const {x, y} = getCoords(e);
-
-            // Out of bounds check
             if (x < 0 || x >= width || y < 0 || y >= height) return;
 
-            // Interpolate line from last position to current to fill gaps
             if (lastGridX !== -1 && lastGridY !== -1) {
                 plotLine(lastGridX, lastGridY, x, y);
             } else {
                 setCell(x, y, selectedChar);
             }
-
             lastGridX = x;
             lastGridY = y;
-
-            // Use requestAnimationFrame for smoother rendering on large grids?
-            // For pixel art grids, direct render is usually fine, but let's keep it simple.
             render();
         });
 
@@ -422,28 +509,42 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
         document.getElementById("createBtn").onclick = () => {
             const w = +document.getElementById("width").value;
             const h = +document.getElementById("height").value;
-            const s = +document.getElementById("scale").value;
             if (w >= 3 && h >= 3) {
-                cellSize = s || 20;
+                cellSize = 20;
                 initGrid(w, h);
             }
         };
 
-        document.getElementById("saveBtn").onclick = () => {
-            // Note: Coordinate system in file is typically bottom-left (0,0) based on visualization logic?
-            // The visualization module flips Y.
-            // Standard expectation: Line 0 in file is Top of the grid or Bottom?
-            // Existing View Code: "lines.forEach((ln, i) => { const y = rows - 1 - i; ..."
-            // This implies the File's 1st line is the TOP of the visual grid (Y=Max).
-            // So we can just join gridData strings naturally.
+        // NEW: Undo/Redo/Fill Handlers
+        document.getElementById("undoBtn").onclick = undo;
+        document.getElementById("redoBtn").onclick = redo;
+        document.getElementById("fillBtn").onclick = () => {
+            isFillMode = !isFillMode;
+            updateUI();
+            render(); // updates cursor
+        };
 
+        // Keyboard Shortcuts
+        window.addEventListener("keydown", e => {
+            // Only if drawing mode is visible
+            if (document.getElementById('drawMode').style.display === 'none') return;
+
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+                e.preventDefault();
+                undo();
+            }
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+                e.preventDefault();
+                redo();
+            }
+        });
+
+        document.getElementById("saveBtn").onclick = () => {
             const lines = gridData.map(row => row.join(""));
             const content = lines.join("\n");
-
             let fname = document.getElementById("filename").value.trim() || "track";
             fname = fname.replace(/[\\/:*?"<>|]/g, "");
             if (!fname.toLowerCase().endsWith(".t")) fname += ".t";
-
             const blob = new Blob([content], {type: "text/plain"});
             const url = URL.createObjectURL(blob);
             const a = Object.assign(document.createElement("a"), {href: url, download: fname});
@@ -455,17 +556,14 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
             const file = e.target.files[0];
             if (!file) return;
             const text = await file.text();
-
             const lines = text.replace(/\r\n/g, "\n").split("\n").filter(Boolean);
             if (!lines.length) return alert('File is empty');
 
             const h = lines.length;
             const w = Math.max(...lines.map(l => l.length));
-
             document.getElementById('width').value = w;
             document.getElementById('height').value = h;
 
-            // Re-init grid
             gridData = [];
             width = w;
             height = h;
@@ -478,13 +576,13 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
                 }
                 gridData.push(row);
             });
-
-            // Ensure borders are locked visually (optional, but good for consistency)
-            // The existing tool forced borders to 'O' on create, but load might imply custom borders.
-            // We will trust the file loaded.
-
             resizeCanvas();
             render();
+
+            // Reset history after load
+            history = [];
+            historyIndex = -1;
+            saveState();
 
             e.target.value = '';
         });
@@ -810,6 +908,9 @@ Solution files: track_01_sol_one.csv, track_01_sol_two.csv">
         document.getElementById('tripNextBtn').addEventListener('click', nextTrip);
 
         window.addEventListener('keydown', e => {
+            // Prevent conflict if typing in input
+            if (e.target.tagName === 'INPUT') return;
+
             switch (e.key) {
                 case 'a':
                     prevTrack();
